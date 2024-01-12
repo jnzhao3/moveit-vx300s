@@ -72,7 +72,6 @@ class Mover(object):
         scene = moveit_commander.PlanningSceneInterface(ns="vx300s")
 
         group_name = "interbotix_arm"
-        # group_name = "vx300s"
         move_group = moveit_commander.MoveGroupCommander(robot_description="vx300s/robot_description", ns="vx300s", name=group_name, wait_for_servers=5.0)
 
         display_trajectory_publisher = rospy.Publisher(
@@ -82,23 +81,15 @@ class Mover(object):
         )
 
         # TODO: Consider other variables?
-        # planning_frame = move_group.get_planning_frame()
-        # eef_link = move_group.get_end_effector_link()
-        # group_names = robot.get_group_names()
 
         planning_frame = move_group.get_planning_frame()
         print("============ Planning frame: %s" % planning_frame)
 
-        # We can also print the name of the end-effector link for this group:
         eef_link = move_group.get_end_effector_link()
         print("============ End effector link: %s" % eef_link)
 
-        # We can get a list of all the groups in the robot:
         group_names = robot.get_group_names()
         print("============ Available Planning Groups:", robot.get_group_names())
-
-        # Sometimes for debugging it is useful to print the entire state of the
-        # robot:
         print("============ Printing robot state")
         print(robot.get_current_state())
         print("")
@@ -112,14 +103,21 @@ class Mover(object):
         self.eef_link = eef_link
         self.group_names = group_names
 
-    
-    # rospy.init_node("mover", anonymous=True)
-        
-    def go_to_joint_state(self):
+        # set plan start state using predefined state
+        self.move_group.set_start_state("sleep")
+
+        # set pose goal using predefined state
+        self.move_group.set_goal_state("home")
+
+        # plan to goal
+        # plan_and_execute(panda, panda_arm, logger)
+
+            
+    def go_to_joint_state(self, joint_goal): # TODO: implement one joint at a time?
         # Copy class variables to local variables to make the web tutorials more clear.
         # In practice, you should use the class variables directly unless you have a good
         # reason not to.
-        move_group = self.move_group
+        # move_group = self.move_group
 
         ## BEGIN_SUB_TUTORIAL plan_to_joint_state
         ##
@@ -129,31 +127,80 @@ class Mover(object):
         ## thing we want to do is move it to a slightly better configuration.
         ## We use the constant `tau = 2*pi <https://en.wikipedia.org/wiki/Turn_(angle)#Tau_proposals>`_ for convenience:
         # We get the joint values from the group and change some of the values:
-        joint_goal = move_group.get_current_joint_values()
-        joint_goal[0] = 0
-        joint_goal[1] = -tau / 8
-        joint_goal[2] = 0
-        joint_goal[3] = -tau / 4
-        joint_goal[4] = 0
-        joint_goal[5] = tau / 6  # 1/6 of a turn
+        # joint_goal = move_group.get_current_joint_values()
+        # joint_goal[0] = 0
+        # joint_goal[1] = -tau / 8
+        # joint_goal[2] = 0
+        # joint_goal[3] = -tau / 4
+        # joint_goal[4] = 0
+        # joint_goal[5] = tau / 6  # 1/6 of a turn
         # joint_goal[6] = 0
 
         # The go command can be called with joint values, poses, or without any
         # parameters if you have already set the pose or joint target for the group
-        move_group.go(joint_goal, wait=True)
+        self.move_group.go(joint_goal, wait=True)
 
         # Calling ``stop()`` ensures that there is no residual movement
-        move_group.stop()
+        self.move_group.stop()
 
         ## END_SUB_TUTORIAL
 
         # For testing:
-        current_joints = move_group.get_current_joint_values()
+        current_joints = self.move_group.get_current_joint_values()
         return all_close(joint_goal, current_joints, 0.01)
+    
+    def go_to_pose_goal(self, pg : list):
+        pose_goal = geometry_msgs.msg.Pose()
+        pose_goal.orientation.w, pose_goal.position.x, pose_goal.position.y, pose_goal.position.z = pg
+
+        self.move_group.set_pose_target(pose_goal)
+        plan = self.move_group.go(wait=True)
+        self.move_group.stop()
+        self.move_group.clear_pose_targets()
+
+        current_pose = self.move_group.get_current_pose().pose
+        return all_close(pose_goal, current_pose, 0.01)
+    
+    def go_to_home(self):
+        self.move_group.go()
+    
+    def plan_cartesian_path(self, wp, scale=0.1):
+
+        waypoints = []
+
+        wpose = self.move_group.get_current_pose().pose
+
+        for point in wp:
+            wpose.position.x += scale * point[0]
+            wpose.position.y += scale * point[1]
+            wpose.position.z += scale * point[2]
+
+            waypoints.append(copy.deepcopy(wpose))
+
+        (plan, fraction) = self.move_group.compute_cartesian_path(
+            waypoints, 0.01, 0.0 # TODO: edit threshold values
+        )
+
+        return plan, fraction
+    
+    def execute_plane(self, plan):
+        self.move_group.execute(plan, wait=True)
+
+    def display_trajectory(self, plan):
+        display_trajectory = moveit_msgs.msg.DisplayTrajectory()
+        display_trajectory.trajectory_start = self.robot.get_current_state()
+        display_trajectory.trajectory.append(plan)
+
+        self.display_trajectory_publisher.publish(display_trajectory)
+
+
 
 def main():
 
     eve = Mover()
+    # eve.move_group.go
+
+    import ipdb; ipdb.set_trace()
 
 
 if __name__ == "__main__":
