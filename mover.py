@@ -77,7 +77,7 @@ class Mover(object):
         display_trajectory_publisher = rospy.Publisher(
             "mover/display_planned_path",
             moveit_msgs.msg.DisplayTrajectory,
-            queue_size=10, # TODO: Change to 20?
+            queue_size=20
         )
 
         # TODO: Consider other variables?
@@ -97,94 +97,77 @@ class Mover(object):
         self.box_name = ""
         self.robot = robot
         self.scene = scene
-        self.move_group = move_group
+        self.mg = move_group
         self.display_trajectory_publisher = display_trajectory_publisher
         self.planning_frame = planning_frame
         self.eef_link = eef_link
         self.group_names = group_names
+        # TODO: how to work with multiple group names?
 
-        # set plan start state using predefined state
-        self.move_group.set_start_state("sleep")
+    def go_sleep(self):
+        self.mg.set_named_target("Sleep")
+        self.mg.go(wait=True)
+        self.mg.stop()
 
-        # set pose goal using predefined state
-        self.move_group.set_goal_state("home")
-
-        # plan to goal
-        # plan_and_execute(panda, panda_arm, logger)
+    def go_home(self):
+        self.mg.set_named_target("Home")
+        self.mg.go(wait=True)
+        self.mg.stop()
+    
+    def go_upright(self):
+        self.mg.set_named_target("Upright")
+        self.mg.go(wait=True)
+        self.mg.stop()
 
             
     def go_to_joint_state(self, joint_goal): # TODO: implement one joint at a time?
-        # Copy class variables to local variables to make the web tutorials more clear.
-        # In practice, you should use the class variables directly unless you have a good
-        # reason not to.
-        # move_group = self.move_group
-
-        ## BEGIN_SUB_TUTORIAL plan_to_joint_state
-        ##
-        ## Planning to a Joint Goal
-        ## ^^^^^^^^^^^^^^^^^^^^^^^^
-        ## The Panda's zero configuration is at a `singularity <https://www.quora.com/Robotics-What-is-meant-by-kinematic-singularity>`_, so the first
-        ## thing we want to do is move it to a slightly better configuration.
-        ## We use the constant `tau = 2*pi <https://en.wikipedia.org/wiki/Turn_(angle)#Tau_proposals>`_ for convenience:
-        # We get the joint values from the group and change some of the values:
-        # joint_goal = move_group.get_current_joint_values()
-        # joint_goal[0] = 0
-        # joint_goal[1] = -tau / 8
-        # joint_goal[2] = 0
-        # joint_goal[3] = -tau / 4
-        # joint_goal[4] = 0
-        # joint_goal[5] = tau / 6  # 1/6 of a turn
-        # joint_goal[6] = 0
-
-        # The go command can be called with joint values, poses, or without any
-        # parameters if you have already set the pose or joint target for the group
-        self.move_group.go(joint_goal, wait=True)
-
-        # Calling ``stop()`` ensures that there is no residual movement
-        self.move_group.stop()
-
-        ## END_SUB_TUTORIAL
+        self.mg.go(joint_goal, wait=True)
+        self.mg.stop()
 
         # For testing:
-        current_joints = self.move_group.get_current_joint_values()
+        current_joints = self.mg.get_current_joint_values()
         return all_close(joint_goal, current_joints, 0.01)
     
     def go_to_pose_goal(self, pg : list):
         pose_goal = geometry_msgs.msg.Pose()
         pose_goal.orientation.w, pose_goal.position.x, pose_goal.position.y, pose_goal.position.z = pg
 
-        self.move_group.set_pose_target(pose_goal)
-        plan = self.move_group.go(wait=True)
-        self.move_group.stop()
-        self.move_group.clear_pose_targets()
+        self.mg.set_pose_target(pose_goal)
+        plan = self.mg.go(wait=True)
+        self.mg.stop()
+        self.mg.clear_pose_targets()
 
-        current_pose = self.move_group.get_current_pose().pose
+        current_pose = self.mg.get_current_pose().pose
         return all_close(pose_goal, current_pose, 0.01)
     
-    def go_to_home(self):
-        self.move_group.go()
-    
-    def plan_cartesian_path(self, wp, scale=0.1):
+    def plan_cartesian_path(self, wp, scale=0.1): # TODO: fix this -- there is something wrong with this method
 
         waypoints = []
 
-        wpose = self.move_group.get_current_pose().pose
+        wpose = self.mg.get_current_pose().pose
+        wpose.orientation.w = 1 # TODO: check if correct?
 
         for point in wp:
+
+            print(point)
+
             wpose.position.x += scale * point[0]
             wpose.position.y += scale * point[1]
             wpose.position.z += scale * point[2]
 
+            print(wpose.position.x, wpose.position.y, wpose.position.z)
+
             waypoints.append(copy.deepcopy(wpose))
 
-        (plan, fraction) = self.move_group.compute_cartesian_path(
+        (plan, fraction) = self.mg.compute_cartesian_path(
             waypoints, 0.01, 0.0 # TODO: edit threshold values
         )
 
         return plan, fraction
     
-    def execute_plane(self, plan):
-        self.move_group.execute(plan, wait=True)
+    def execute_plan(self, plan):
+        self.mg.execute(plan, wait=True)
+        self.mg.stop() # TODO: is this necessary?
 
     def display_trajectory(self, plan):
         display_trajectory = moveit_msgs.msg.DisplayTrajectory()
@@ -193,12 +176,30 @@ class Mover(object):
 
         self.display_trajectory_publisher.publish(display_trajectory)
 
+    def step(self, wp): # TODO: add scale variable?
+        plan, fraction = self.plan_cartesian_path(wp)
+        self.execute_plan(plan)
+        # TODO: return somethign?
+
+    def rotate_gripper(self, theta, scale=1):
+        # ['waist', 'shoulder', 'elbow', 'forearm_roll', 'wrist_angle', 
+        # 'wrist_rotate', 'ee_arm', 'gripper_bar', 'ee_bar', 'ee_gripper']
+
+        joint_values = self.mg.get_current_joint_values()
+        joint_values[5] += theta # TODO: figure out how to stop shoulder angle from changing
+
+        self.go_to_joint_state(joint_values)
+        # joint_values = self.mg.get_current_joint_values()
+        # plan = self.mg.go(wait=True)
+        # self.mg.stop()
+        # self.mg.clear_pose_targets()
+
+
 
 
 def main():
 
     eve = Mover()
-    # eve.move_group.go
 
     import ipdb; ipdb.set_trace()
 
